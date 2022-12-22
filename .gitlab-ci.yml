@@ -1,0 +1,40 @@
+image: "ros:melodic-ros-core"
+
+before_script:
+  - apt-get -yq update
+  - apt-get -yq install python3.7 python3-pip
+  - python --version
+  - pip3 install --upgrade pip 
+  - pip3 install -r requirements.txt
+
+stages:
+  - Static Analysis
+  - Test
+
+mypy:
+  stage: Static Analysis
+  script:
+  - pwd
+  - ls -l
+  - python -m mypy bild/file.py
+  - python -m mypy bild/directory.py
+
+flake8:
+  stage: Static Analysis
+  script:
+  - flake8 --max-line-length=120 bild/*.py
+
+pylint:
+  stage: Static Analysis
+  allow_failure: true
+  script:
+  - pylint -d C0301 bild/*.py
+
+pytest:
+  stage: Test
+  script:
+  - pwd
+  - ls -l
+  - export PYTHONPATH="$PYTHONPATH:."
+  - python3 -c "import sys;print(sys.path)"
+  - python3 -m pytest --junitxml=report.xml

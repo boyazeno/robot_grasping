@@ -1,0 +1,6 @@
+time_step_size: 1.0
+use_gui: True
+use_real_time_simulation: False
+reward_assigner: "NaiveRewardAssigner"
+joint_amplitude: 0.1
+finger_amplitude: 0.01
