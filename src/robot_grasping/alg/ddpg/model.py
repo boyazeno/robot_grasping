@@ -40,4 +40,7 @@ class SimplePolicyNet(nn.Module):
         self._state_backbone = get_efficientnet_b1(in_channels=8, out_channels=8*11)
     
     def forward(self, s:torch.Tensor)->torch.Tensor:
-        return self._state_backbone(s)
+        feature = self._state_backbone(s)
+        feature = feature.reshape(-1, 8, 11)
+        feature = torch.softmax(feature, dim=-1)
+        return feature.reshape(-1, 8*11)

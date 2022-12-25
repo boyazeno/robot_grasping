@@ -57,3 +57,18 @@ class RobotBase(ABC):
     @abstractclassmethod
     def get_tcp_velocity(self)->List[float]:
         return
+
+
+    @abstractclassmethod
+    def is_self_collide(self) -> bool:
+        return
+
+
+    @abstractclassmethod
+    def is_collide_with(self, id: int, ignore_hand:bool=True) -> bool:
+        return
+
+
+    @abstractclassmethod
+    def is_touched_with(self, id: int, both_finger:bool=False) -> bool:
+        return

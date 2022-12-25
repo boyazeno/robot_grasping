@@ -91,7 +91,7 @@ class Action:
 class State:
     joint_value: List[float]
     object_model_infos: List[NameWithPose]
-    visual_data: Dict
+    visual_data: Dict[str, Dict[str, np.ndarray]]
     is_terminated: bool
     
 

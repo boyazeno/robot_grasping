@@ -35,7 +35,7 @@ env = Env(
 robot_init_base_pose = Pose()
 robot_init_joint_position = [
     0.0,
-    -0.25 * np.pi,
+    0.0 * np.pi,
     0.0,
     0.75 * np.pi,
     0.0,
@@ -44,7 +44,7 @@ robot_init_joint_position = [
 ]
 robot_init_hand_position = 0.08
 object_init_poses = [
-    NameWithPose(name="box", pose=Pose(position=[0.4, 0.0, 0.0]))
+    NameWithPose(name="box", pose=Pose(position=[0.7, 0.0, 0.0]))
 ]
 env.load(
     robot_init_base_pose=robot_init_base_pose,
@@ -66,13 +66,13 @@ logging.info(f"#" * 80)
 
 # Config DDPG
 train_config = DDPGTrainConfig(
-    epoch_num=1,
-    episode_num=10,
-    max_step_num=100,
+    epoch_num=100,
+    episode_num=50,
+    max_step_num=40,
     retrain=True,
     last_epoch_num=0,
-    batch_size=2,
-    save_path=Path("/home/boya/noetic_ws/src/RL/robot_grasping/data/test"),
+    batch_size=8,
+    save_path=Path("/media/boya/B67E7B8B7E7B42E3/Users/18486/ubuntu_file/robot_grasping/data/test"),
     save_epoch_interval=1,
     learning_rate=1e-4,
     scheduler_params={
@@ -84,10 +84,13 @@ train_config = DDPGTrainConfig(
 )
 DDPG_config = DDPGConfig(
     train_config=train_config,
-    e_greedy_rate=0.05,
+    e_greedy_rate=0.1,
     r_decay_rate=0.1,
     q_net_model_name="SimpleQNet",
     policy_net_model_name="SimplePolicyNet",
+    q_net_device="cuda:0",
+    policy_net_device="cuda:0",
+    input_image_shape= (256,144)
 )
 logging.info(f"#" * 80)
 logging.info(f"Load DDPG!")

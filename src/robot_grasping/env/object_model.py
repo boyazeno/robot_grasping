@@ -2,7 +2,7 @@ import logging
 from enum import Enum
 from pathlib import Path
 from robot_grasping.utils.types import Pose
-from typing import List
+from typing import List, Tuple
 from abc import ABC
 from abc import abstractclassmethod
 import pybullet as p
@@ -19,6 +19,8 @@ class ObjectModelBase(ABC):
         pass
 
     def set_pose(self, pose: Pose):
+        offset_position = pose.position
+        offset_position[2] +=0.005 # Avoid collision with the plane
         p.resetBasePositionAndOrientation(self._object_id, pose.position, pose.orientation_xyzw)
 
     def get_pose(self)->Pose:
@@ -68,28 +70,31 @@ class PrimitiveType(Enum):
 
 
 class PrimitiveObjectModel(ObjectModelBase):
-    def __init__(self, name: str, type: PrimitiveType, size: List[float], mass: float = 1.0) -> None:
+    def __init__(self, name: str, type: PrimitiveType, size: List[float], mass: float = 1.0, color: Tuple[float] = (1.0, 0.5, 1.0, 1.0)) -> None:
         self._size = size
         self._type = type
         self._mass = mass
+        self._color = color
         super().__init__(name)
 
 
     def load(self, init_pose: Pose):
         if self._type is PrimitiveType.Cube:
             assert len(self._size) == 3
-            col_primitve_id = p.createCollisionShape(shapeType=p.GEOM_BOX, halfExtents=self._size)
+            vis_primitive_id = p.createVisualShape(shapeType=p.GEOM_BOX, halfExtents=self._size, rgbaColor=self._color)
+            col_primitive_id = p.createCollisionShape(shapeType=p.GEOM_BOX, halfExtents=self._size)
         elif self._type is PrimitiveType.Sphere:
             assert len(self._size) == 1
-            col_primitve_id = p.createCollisionShape(shapeType=p.GEOM_SPHERE, radius=self._size[0])
+            vis_primitive_id = p.createVisualShape(shapeType=p.GEOM_SPHERE, radius=self._size[0], rgbaColor=self._color)
+            col_primitive_id = p.createCollisionShape(shapeType=p.GEOM_SPHERE, radius=self._size[0])
         elif self._type is PrimitiveType.Cylinder:
             assert len(self._size) == 1
-            col_primitve_id = p.createCollisionShape(shapeType=p.GEOM_CYLINDER, radius=self._size[0], height=self._size[1])
+            vis_primitive_id = p.createVisualShape(shapeType=p.GEOM_CYLINDER, radius=self._size[0], height=self._size[1], rgbaColor=self._color)
+            col_primitive_id = p.createCollisionShape(shapeType=p.GEOM_CYLINDER, radius=self._size[0], height=self._size[1])
         else:
             raise KeyError(f"Primitive type not implemented yet!")
 
         self._init_pose = init_pose
-        self._object_id = p.createMultiBody(self._mass, col_primitve_id, -1, self._init_pose.position, self._init_pose.orientation_xyzw)
-
+        self._object_id = p.createMultiBody(self._mass, col_primitive_id, vis_primitive_id, self._init_pose.position, self._init_pose.orientation_xyzw)
 
 

@@ -44,6 +44,9 @@ class DDPGConfig:
     r_decay_rate: float = 0.1
     q_net_model_name: str = "SimpleQNet"
     policy_net_model_name: str = "SimplePolicyNet"
+    q_net_device: str  = "cpu"
+    policy_net_device: str  = "cuda:0"
+    input_image_shape: Tuple[float] = (256,144)
 
 
 @dataclass
@@ -81,17 +84,17 @@ class DDPGTrainingBatchData:
     is_terminate: List[bool]
 
     @staticmethod
-    def from_data(data_batch: List[DDPGData]):
-        a_batch = torch.concat([DataConverter.to_a(data.a) for data in data_batch],dim=0)
-        r_batch = torch.concat([DataConverter.to_r(data.r) for data in data_batch], dim=0)
-        s_batch = torch.concat([DataConverter.to_s(data.s) for data in data_batch], dim=0)
-        s_n_batch = torch.concat([DataConverter.to_s(data.s_n) for data in data_batch], dim=0)  
+    def from_data(data_batch: List[DDPGData], device: str = "cuda:0", shape:Tuple[float] = (256,144)):
+        a_batch = torch.concat([DataConverter.to_a(data.a) for data in data_batch],dim=0).to(device)
+        r_batch = torch.concat([DataConverter.to_r(data.r) for data in data_batch], dim=0).to(device)
+        s_batch = torch.concat([DataConverter.to_s(data.s, shape=shape) for data in data_batch], dim=0).to(device)
+        s_n_batch = torch.concat([DataConverter.to_s(data.s_n, shape=shape) for data in data_batch], dim=0).to(device)
         is_terminate_batch = [data.s_n.is_terminated for data in data_batch] 
         return DDPGTrainingBatchData(a=a_batch, r=r_batch, s=s_batch, s_n=s_n_batch, is_terminate=is_terminate_batch)
 
 
 class DDPGDatabase:
-    def __init__(self, save_path: Path, max_buffer_size: float = 1024) -> None:
+    def __init__(self, save_path: Path, max_buffer_size: float = 500) -> None:
         self._save_path = save_path
         self._max_buffer_size = max_buffer_size
         self._buffer = []
@@ -139,7 +142,7 @@ class DDPGDatabase:
         return self._buffer[id]
 
     def _load_from_file(self, id: int) -> DDPGData:
-        exist_file_names = set(self._save_path.iterdir())
+        exist_file_names = set(i.name for i in self._save_path.iterdir())
         if str(id) not in exist_file_names:
             raise KeyError(f"Data with id {id} not exist in file!")
         # database start from 0
@@ -149,9 +152,10 @@ class DDPGDatabase:
         return data
 
     def _is_buffer_full(self) -> bool:
-        return (
-            sys.getsizeof(self._buffer) / (1024.0**2) >= self._max_buffer_size
-        )
+        # return (
+        #     sys.getsizeof(self._buffer) / (1024.0**2) >= self._max_buffer_size
+        # )
+        return len(self._buffer) >= self._max_buffer_size
 
     def _get_size_in_file(self) -> int:
         return len(list(self._save_path.iterdir()))
@@ -165,13 +169,13 @@ class DDPG:
         self._config = config
         self._env = env
 
-    def _get_param_file_name(self, net_id: str, net_type: str) -> str:
+    def _get_param_file_name(self, net_id: str, net_type: str, epoch_num: int) -> str:
         param_file_name = self._config.train_config.save_path / (
             net_type
             + "_"
             + str(net_id)
             + "_epoch_"
-            + str(self._config.train_config.last_epoch_num)
+            + str(epoch_num)
         )
         return param_file_name
 
@@ -187,36 +191,36 @@ class DDPG:
         self._policy_net_2: nn.Module = PolicyNetNetworkModel()
         self._database = DDPGDatabase(
             save_path=self._config.train_config.save_path / "database",
-            max_buffer_size=1024,
+            max_buffer_size=300,
         )
+        net_list = [(self._q_net_1, 1, "q_net"), (self._q_net_2, 2, "q_net"), (self._policy_net_1, 1, "policy_net"), (self._policy_net_2, 2, "policy_net")]
+
         # Load previous epoch
         if not self._config.train_config.retrain:
-            self._q_net_1.load_state_dict(
-                torch.load(self._get_param_file_name(1, "q_net"))
-            )
-            self._q_net_2.load_state_dict(
-                torch.load(self._get_param_file_name(2, "q_net"))
-            )
-            self._policy_net_1.load_state_dict(
-                torch.load(self._get_param_file_name(1, "policy_net"))
-            )
-            self._policy_net_2.load_state_dict(
-                torch.load(self._get_param_file_name(2, "policy_net"))
-            )
+            for net, net_id, net_type in net_list:
+                net.load_state_dict(
+                    torch.load(self._get_param_file_name(net_id, net_type, self._config.train_config.last_epoch_num))
+                )
+
+        # To device
+        self._q_net_1.to(self._config.q_net_device)
+        self._q_net_2.to(self._config.q_net_device)
+        self._policy_net_1.to(self._config.policy_net_device)
+        self._policy_net_2.to(self._config.policy_net_device)
 
         # Init optimizer, scheduler
         self._optimizer_q_net_1 = torch.optim.AdamW(
             self._q_net_1.parameters(), lr=self._config.train_config.learning_rate,
-        )  # TODO
+        )
         self._optimizer_q_net_2 = torch.optim.AdamW(
             self._q_net_2.parameters(), lr=self._config.train_config.learning_rate,
-        )  # TODO
+        )
         self._optimizer_policy_net_1 = torch.optim.AdamW(
             self._policy_net_1.parameters(), lr=self._config.train_config.learning_rate,
-        )  # TODO
+        )
         self._optimizer_policy_net_2 = torch.optim.AdamW(
             self._policy_net_2.parameters(), lr=self._config.train_config.learning_rate,
-        )  # TODO
+        )
         self._scheduler = StepLearningRateScheduler(
             [
                 self._optimizer_q_net_1,
@@ -240,21 +244,27 @@ class DDPG:
         global_steps = 0
         for train_epoch in range(self._config.train_config.epoch_num):
             logging.info(f"Start epoch {train_epoch}")
-
             average_losses = [0.0 for _ in range(4)]
             for train_episode in tqdm(
                 range(self._config.train_config.episode_num)
             ):
+                self._env.reset()
                 state = self._env.get_state()
-                action = DataConverter.to_action(self._policy_net_1(DataConverter.to_s(state)))  # TODO get action
-                current_step_count = 0
-
                 for train_step in range(self._config.train_config.max_step_num):
                     global_steps += 1
+                    if train_episode > 2 and train_epoch == 0:
+                        action = DataConverter.to_action(self._policy_net_1(DataConverter.to_s(state, shape=self._config.input_image_shape).to(self._config.policy_net_device)))  # TODO get action
+                        logging.info(f"Current action is: {action}")
+                        action = self._choose_e_greedy_action(action=action, e_greedy_rate=self._config.e_greedy_rate, global_steps=global_steps)
+                    else:
+                        action = self._env.get_human_action()
+                        logging.info(f"Teached action is: {action}")
+                    logging.info("*"*80)
+                    logging.info(f"Chosen action is: {action}")
 
                     # Get next state and reward
                     reward, state_n = self._env.execute_action(action=action)
-
+                    logging.info(f"reward is: {reward}")
                     # Update database
                     self._database.add(
                         DDPGData(s=state, s_n=state_n, r=reward, a=action)
@@ -268,7 +278,7 @@ class DDPG:
                         batch_size=self._config.train_config.batch_size
                     )
                     # Convert to training torch format
-                    mini_batch = DDPGTrainingBatchData.from_data(mini_batch)
+                    mini_batch = DDPGTrainingBatchData.from_data(data_batch=mini_batch, device=self._config.q_net_device, shape=self._config.input_image_shape)
 
                     # Update parameter
                     episode_losses = self._update_parameters(
@@ -282,10 +292,17 @@ class DDPG:
                         )
                     ]
                     
-                    self._training_logger.add_losses(["loss_q_net_1","loss_q_net_2","loss_policy_net_1","loss_policy_net_2"], episode_losses)
+                    self._training_logger.add_losses(["loss_q_net_1","loss_q_net_2","loss_policy_net_1","loss_policy_net_2"], episode_losses, step_num=global_steps)
+                    state = state_n
+
+            # Save parameter for this epoch
+            logging.info(f"Save parameters for epoch {train_epoch}")
+            for net, net_id, net_type in net_list:
+                torch.save(net.state_dict(), self._get_param_file_name(net_id, net_type, epoch_num=train_epoch))
+
 
             current_learning_rates = self._scheduler.update(losses=average_losses, epoch_num=train_epoch)
-            self._training_logger.add_learning_rates(["loss_q_net_1","loss_q_net_2","loss_policy_net_1","loss_policy_net_2"], current_learning_rates)
+            self._training_logger.add_learning_rates(["loss_q_net_1","loss_q_net_2","loss_policy_net_1","loss_policy_net_2"], current_learning_rates, step_num=global_steps)
         pass
 
     def evaluate(self):
@@ -298,13 +315,13 @@ class DDPG:
         # Caluculate cost
         loss_q_net_1 = self._calculate_q_net_loss(
             q_net=self._q_net_1,
-            target_net=self._q_net_2,
+            target_q_net=self._q_net_2,
             policy_net=self._policy_net_1,
             mini_batch=mini_batch,
         )
         loss_q_net_2 = self._calculate_q_net_loss(
             q_net=self._q_net_2,
-            target_net=self._q_net_1,
+            target_q_net=self._q_net_1,
             policy_net=self._policy_net_2,
             mini_batch=mini_batch,
         )
@@ -336,16 +353,29 @@ class DDPG:
         self._optimizer_policy_net_2.step()
 
         return [
-            loss_q_net_1,
-            loss_q_net_2,
-            loss_policy_net_1,
-            loss_policy_net_2,
+            loss_q_net_1.detach().cpu(),
+            loss_q_net_2.detach().cpu(),
+            loss_policy_net_1.detach().cpu(),
+            loss_policy_net_2.detach().cpu(),
         ]
+
+    def _choose_e_greedy_action(self, action:Action, e_greedy_rate:float, global_steps:int)->Action:
+        chosen_action = None
+        start_step, end_step = 0, 5000
+        start_value, end_value = 1.0, e_greedy_rate
+        b = (start_step-end_step)/np.log(start_value/end_value)
+        a = start_value/np.exp(start_step/b)
+        e_greedy_rate = a*np.exp(global_steps/b) if global_steps < end_step else e_greedy_rate
+        if np.random.rand() > e_greedy_rate:
+            chosen_action = action
+        else:
+            chosen_action = Action(robot_joint_velocity=np.random.randint(low=-5, high=6,size=7).tolist(), robot_hand_velocity=np.random.randint(low=-5, high=6))
+        return chosen_action
 
     def _calculate_q_net_loss(
         self,
         q_net: nn.Module,
-        target_net: nn.Module,
+        target_q_net: nn.Module,
         policy_net: nn.Module,
         mini_batch: DDPGTrainingBatchData,
     ) -> torch.Tensor:
@@ -375,10 +405,10 @@ class DDPG:
         #     )
         # loss = total_loss / len(mini_batch)
         with torch.no_grad():
-            target_q_value = target_net(mini_batch.s_n, policy_net(mini_batch.s_n))
-            target_q_value = torch.mul(target_q_value, torch.logical_not(torch.as_tensor(mini_batch.is_terminate)).float()) # ignore the target q value for those final state
+            target_q_value = target_q_net(mini_batch.s_n, policy_net(mini_batch.s_n.to(self._config.policy_net_device)).to(self._config.q_net_device))
+            target_q_value = torch.mul(target_q_value, torch.logical_not(torch.as_tensor(mini_batch.is_terminate)).float().to(self._config.q_net_device)) # ignore the target q value for those final state
         q_value = q_net(mini_batch.s, mini_batch.a)
-        loss = torch.pow( mini_batch.r + self._config.r_decay_rate*target_q_value - q_value, torch.as_tensor(2.0).float())
+        loss = torch.pow( mini_batch.r + self._config.r_decay_rate*target_q_value - q_value, torch.as_tensor(2.0).float().to(self._config.q_net_device))
         loss = torch.sum(loss)/mini_batch.s.shape[0]
         return loss
 
@@ -393,9 +423,9 @@ class DDPG:
         #     q_value = q_net(data.s, policy_net(data.s))
         #     total_loss += q_value
         # loss = total_loss / len(mini_batch)
-        q_value = q_net(mini_batch.s, policy_net(mini_batch.s))
+        q_value = q_net(mini_batch.s, policy_net(mini_batch.s.to(self._config.policy_net_device)).to(self._config.q_net_device))
         q_net.requires_grad_(requires_grad=True)
-        loss = torch.sum(q_value)/mini_batch.s.shape[0]
+        loss = -1 * torch.sum(q_value)/mini_batch.s.shape[0]
         return loss
 
     def _get_model(self, model_name: str) -> nn.Module:

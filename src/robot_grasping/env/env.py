@@ -16,7 +16,7 @@ from robot_grasping.env.sensor.camera_sensor import FixedCameraSensor
 from robot_grasping.env.sensor.camera_sensor import WristCameraSensor
 import logging
 import importlib
-
+import cv2
 
 class Env:
     def __init__(
@@ -63,7 +63,7 @@ class Env:
         else:
             p.connect(p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.createCollisionShape(p.GEOM_PLANE)
+        self._ground_id = p.createCollisionShape(p.GEOM_PLANE)
         p.createMultiBody(0, 0)
         p.setGravity(0, 0, -10)
         p.setRealTimeSimulation(
@@ -87,7 +87,7 @@ class Env:
         camera_config = {
             "return_rgb": True,
             "return_depth": True,
-            "return_mask": False,
+            "return_mask": True,
             "return_pc": False,
         }
         for camera in self._cameras:
@@ -98,15 +98,21 @@ class Env:
         self._reward_assigner = reward_assigner 
 
     def reset(self):
-        self._executed_step = 0
+        self._executed_step = -1
         self._robot.reset()
         for object_name in self._loaded_object_names:
             self._object_models[object_name].reset()
+        logging.info("Reset!!!!!!!!!")
+        logging.info(f"self._robot: {self._robot._init_joint_position}")
+        self._run_simulation(time=0.5)
 
     def execute_action(self, action: Action) -> Tuple[float, State]:
         # Execute action
+        np.random.rand()
         if action is not None:
             robot_joint_velocity, robot_hand_velocity = self._convert_discret_action_2_real_action(action)
+            print(f"execute joint velocity: {robot_joint_velocity}")
+            print(f"execute hand velocity: {robot_hand_velocity}")
             self._robot.set_joint_velocity(robot_joint_velocity)
             self._robot.set_hand_velocity(robot_hand_velocity)
 
@@ -116,15 +122,15 @@ class Env:
 
         # Get next state & reward
         next_state = self.get_state()
-        reward = self.get_reward()
+        reward = self.get_reward(state=next_state)
 
         return reward, next_state
     
     def get_executed_step(self)->int:
         return 0 if self._executed_step is None else self._executed_step
 
-    def get_reward(self) -> float:
-        reward = self._reward_assigner.get_reward()
+    def get_reward(self, state:State) -> float:
+        reward = self._reward_assigner.get_reward(state=state)
         return reward
 
     def get_state(self) -> State:
@@ -133,7 +139,7 @@ class Env:
             name: object_model.get_pose()
             for name, object_model in self._object_models.items()
         }
-        visual_data = self._get_visual_data()
+        visual_data = self._get_visual_data(scale=self._config["visual_data_scale"])
         is_terminated = self._is_terminated()
         return State(
             joint_value=joint_value,
@@ -142,17 +148,24 @@ class Env:
             is_terminated=is_terminated,
         )
 
+    def _run_simulation(self, time:float):
+        for _ in range(int(time*240)):
+            p.stepSimulation()
+
     def _is_terminated(self) -> bool:
         return self._reward_assigner.is_terminated()
 
-    def _get_visual_data(self) -> Dict:
+    def _resize_image(self, image:np.ndarray, shape:Tuple[float]):
+        return cv2.resize(image.astype("float"), shape, cv2.INTER_NEAREST)
+
+    def _get_visual_data(self, scale: float=1.0) -> Dict:
         #self._camera.reset_pose(camera_pose=Pose())
         visual_data={}
         for camera in self._cameras:
             rgb, depth, mask, pc = camera.get_data()
-            visual_data[camera.name] = {"rgb": rgb,
-                                        "depth": depth,
-                                        "mask": mask,
+            visual_data[camera.name] = {"rgb": self._resize_image(image=rgb, shape=(int(rgb.shape[1]*scale), int(rgb.shape[0]*scale))),
+                                        "depth": self._resize_image(image=depth, shape=(int(depth.shape[1]*scale), int(depth.shape[0]*scale))),
+                                        "mask": self._resize_image(image=mask, shape=(int(mask.shape[1]*scale), int(mask.shape[0]*scale))),
                                         "pc": pc,}
             # Debug
             if self._visualize:
@@ -177,11 +190,10 @@ class Env:
             for i in range(len(data) // 2 - 1)
         ]
         robot_hand_velocity = int(data[-2:])
-        action = Action(
+        return Action(
             robot_joint_velocity=robot_joint_velocity,
             robot_hand_velocity=robot_hand_velocity,
         )
-        return self._convert_discret_action_2_real_action(action)
 
     def _convert_discret_action_2_real_action(self, action:Action):
         joint_amplitude = self._config.get("joint_amplitude", 0.1)

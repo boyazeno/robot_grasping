@@ -1,5 +1,4 @@
 import numpy as np
-import pybullet as p
 from typing import Any, List, Optional
 import matplotlib.pyplot as plt
 import open3d as o3d
@@ -9,6 +8,9 @@ class Visualizer:
     def __init__(self, use_bullet:bool = True) -> None:
         self._ids = []
         self._use_bullet = use_bullet
+        if self._use_bullet:
+            import pybullet as p
+
 
     def add_pc(self, pc:Optional[np.ndarray], color:Optional[np.ndarray], size:float = 0.002):
         if pc is None:
